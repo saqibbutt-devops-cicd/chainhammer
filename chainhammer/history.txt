@@ -1,0 +1,226 @@
+v59 15/4/2019-29/4/2019
+"azure - solve install problems, and adapt all for Ubuntu"
+    repaired broken links in documentation, using scripts/link-checker.sh
+    github-linguist had been reporting 'jupyter-notebook' as main language
+       solved; now more correct: Python 70%, Shell 15%, Jupyter 11%, HTML 4%
+    Microsoft had problems installing python virtualenv; solved
+    Ubuntu specific packages needed scripts/install-packages.sh modifications
+    Ubuntu needed different docker installation key & repo; solved
+    Ubuntu fully tested without and with docker; all good, and still working on Debian too.
+    Quorum local network shows a new problem - issue raised at quorum-crux
+    Azure instructions integrated as "benchmarking a remote node" into README.md
+
+v58 8/4/2019-12/4/2019
+"azure - benchmarking of a(ny) remote node"
+    Microsoft's Azure team is working on a BaaS blockchain-as-a-service product
+    they want chainhammer for benchmarking
+    patched RPCaddress, added password, test runs, virtualenv installation noobproof ...
+    adapted installation, leave out docker & network starters - new: `scripts/install.sh nodocker`
+    instructions manual, doubly tested and verbose: docs/azure.md
+    this gave it a generally useful upgrade: 
+       step by step instructions how to benchmark ANY remote Ethereum node with chainhammer
+
+v57 20/2/2019-26/2/2019
+"video"
+    choosing the right foss tools
+    concept, settings, decisions
+    screencast recording of important steps
+    audio recordings, explain what is going on
+    video editing
+    music to hide the audio problems
+    new channel on youtube, release video
+    video production files in docs/video-*.zip
+    for more details see docs/video.md
+    
+v56 27/1/2019-24/2/2019 
+"new public release: tests, announcements, final polish"
+    money received for v45-v55 --> git push upstream master
+    history.txt now got "summarizing headings" for each version
+    cleaned up networks/*-start.sh 
+    began video screencast documentation of chainhammer
+    github issues announcements: new version v55 released
+    whole lab tests on AWS t2.medium, parity v2 stalling even with "sequential" --> going back to v1.11.11
+    new Amazon AMI image v57
+    
+v55 23/1/2019-26/1/2019 
+"Testing in the cloud; docker problems; much documentation; terminator layout. Testing: Done!"
+    documentation update reproduce.md is MUCH easier now; 
+      must accelerate = simply moved old stuff to reproduce_outdated.md for now
+    crosslinking some manual files. Now: reproduce.md + FAQ.md + cloud.md + results/
+    different timezone on cloud machine, updated tests
+    scripts/remove-all-docker.sh can now also run silent, without waiting for confirmation
+    tried much, but docker install needs logout&login for the user to have docker access
+    more testing around install-docker.sh
+    temp: OPTIONALLY remove all docker before EACH experiment, to save diskspace
+          later removed gain, unnecessary complexity, just use larger disk instead
+    bash-script problems: always "$x" all variables $x, because if $x= empty then comparison fails otherwise
+    FAQ.md 
+        started long list of troubleshooting advice in FAQ.md
+        'could not find an available, non-overlapping IPv4 address pool' stupidly caused by local vpn !
+        TOC for FAQ
+    Quorum OFF by default because too much RAM for t2.micro; ON with switch CH_QUORUM=true
+    more versatile and consistent checking for and killing of leftovers
+    now always same port :8545 everywhere!
+    parity instantseal tps.py had incomplete knowledge about peakTpsAv, now also searches backwards
+    all networks/*-stop.sh now also do docker-compose down, for full takedown
+    installation chapters clearer
+    timeout deploy.py on Quorum small machines; extended, now prints: "Receipt arrived. Took 35.1 seconds" 
+    measured: 27 minutes for 125,000 transactions on 5 Ethereum providers, for _large.sh 
+    'terminator' 
+         layout for 6 ssh chainhammer info terminals in one window, REALLY useful.
+         screenshot terminator
+    v55: Testing in the cloud - done.
+
+v54 23/1/2019 
+"Tests before next release: all 98 unit tests PASSED on 5 network types"
+    reminder: link-checker.sh has to be run when upstreamed into public repo
+    unittests: 98 tests PASSED on TestRPC
+    solved problems when interrupted: killing more leftovers, docker containers, etc
+    TODO: perhaps also docker-compose down consistently as part of each -stop.sh? not only -clean.sh
+    fix for quorum path
+    fix for request.get() not allowed in parity instantseal
+    v54: all 98 unittests PASSED on all 5 Ethereum providers
+
+v53 23/1/2019 
+"documentation updates"
+    moved much from main README.md into docs/FAQ.md
+    docs/FAQ.md added chapters: how to clone from gitlab, how to kill processes, docker, etc
+    docs/FAQ.md table of contents = TOC
+    extended docs/TODO.md extended e.g. with had-to-be-postponed ideas
+    main README.md is much shorter now, much easier to grasp
+    tried out everything on Laptop, fixed some occuring issues
+    running an initial experiment needs only TWO lines now!
+
+v52 18/1/2019-23/1/2019 
+"full automation! run-all_{small,large}.sh; many github issues; tweaked many details"
+    parity double-// in web3.node.version
+    parity instantseal TODO: integer-seconds blocktime not right
+    parity instantseal now treated like TestRPC: no empty blocks
+    many github interactions, parity team; testing parity-deploy, my own scripts
+    numTransactions not via config.py anymore, for scripting several experiments
+    more elegant send.py log output, mention ROUTE only once
+    tuned killing network starters; parity, quorum
+    parity-deploy still causes many issues, my own workarounds
+    new scripts for listing and killing background processes
+    quorum-configure.sh easy now that blk.io merged my pull request
+    many little improvements, around running experiment & results output
+    finalTpsAv needed cleverer dict access
+    new script to run 5 experiments with different clients all in one go!
+    ./run-all_small.sh for integration testing and 
+    ./run-all_large.sh to create all results per one machine
+
+v51 15/1/2019 
+"automation of network-configure/start/stop/clean; run.sh now ~complete"
+    tried out parity v2.2.3 - but still not able to survive multithreaded sending
+    16 (!) new scripts, see folder networks/ 
+    for -start, -stop, -clean of geth, parity aura/instantseal, quorum, and testrpc!
+    for -configure of parity instantseal, and aura; still TODO: geth and quorum
+    run.sh can call *-start.sh and *-stop.sh scripts when given a 2nd parameter
+    run.sh 1st parameter now sane to be used as part of filename
+    ./run.sh is now a complete experiment launcher !
+
+v50 14/1/2019-15/1/2019 
+"results page generator; TestRPC fix; include all TpS measurements; more automation"
+    new page_generator.py which makes a markdown and an HTML page from each run
+    formatting issues, improved looks
+    page also contains whole infodict, better safe than sorry.
+    TestRPC has no empty blocks --> fix blocksDB_create/diagramming.py
+    fixed issue with finalTpsAv
+    diagramming also stores its blocktimesTpsAv result
+    updated tests
+    image-filename now also contains time-of-experiment-start to avoid overwriting
+    run.sh now starts with ./is_up.py and ends with ./page_generator.py
+
+v49 11/1/2019-13/1/2019
+"whole experiment in 1 line: run.sh, and new INFOFILE across all steps. Got paid!"
+    run.sh = 
+    virtualenv + tps.py + deploy.py + send.py + blocksDB_create.py + blocksDB_diagramming.py
+    AUTOSTOP_TPS: tps.py can be stopped now, by send.py writing to last-experiment.json
+    last-experiment.json contains crucial information, e.g. range of blocks
+    now also as carrier of block range info into blocksBD_create/diagramming.py
+    better last-experiment.json with more infos
+    clienttype.py now also nodeVersion
+    Web3Foundation has paid! Mention in LICENSE and README.md#credits
+
+v48 7/1/2019-10/1/2019
+"rewritten diagrams generator"
+    new diagramming; study matplotlib.plyplot, then start anew
+    first as jupyter notebook, then merged into blocksDB_diagramming.py
+    better appearance, scatter instead of box plots, for blocksize and blocktime
+    better statistics: Now averages only over experiment blocks
+    averages printed but also shown as horizontal lines
+    now always 10 blocks at the end, to show averages 
+
+v47 4/1/2019
+"find out real range of experiment block numbers, and is_up.py"
+    recognize known nodeNames, mention when new one
+    is_up.py loops until network is reachable
+    getReceipts_multithreaded now also as multithreading queue
+    when_last_ones_mined__give_range_of_block_numbers() waits until all receipts are there,
+    from beginning and end of experiment - and infers the range of blocknumbers the txs are in
+    
+v46 3/1/2019
+"transaction success tester, and misc improvements"
+    show peak TPS_average, and memorize after 3 relaxation rounds
+    new switch PARITY_ALREADY_UNLOCKED
+    cleaned up config.py a bit, more consistent naming, ...
+    adapt tests to code changes
+    fixed: account-passphrase.txt now also found within tests with Geth
+    new GAS_FOR_SET_CALL constant
+    remember all sent transaction hashes
+    transaction success/failure checker, via random sample of txs
+    criterion txReceipt.status OR gasUsed/gasGiven comparison
+
+v45 2/1/2019
+"better installation routines"
+    installer script v45 = refactored into 6 separate install-XYZ.sh scripts
+    upgraded all hardcoded versions (docker, pip, requirements.txt, etc)
+    new beginning cloud machine, 
+    tested the new install.sh locally and in the cloud
+
+
+2018:
+
+
+v44 17/12/2018
+    installer script v44 = replaces whole top half of reproduce.md !
+      cd chainhammer; scripts/install.sh
+
+v43 5/12/2018-16/12/2018
+    Reorg everything into subfolders for better overview
+      docs & results for human readable, 
+      networks & scripts for starting several nodes, and helper scripts,
+      hammer & reader for the core chainhammer & chainreader code,
+    BUT now links are broken, sorry refactoring had to be done;
+     do this to find the old structure: 
+      git checkout f7d9e81e4ce9f81d3ad3ad67b7f92c477b9b7419
+      TODO - make this a release tag perhaps?
+    Initial skeleton for run.sh
+    code: import & path changes, so that tests were still running PASSED
+    new tool scripts/link-checker.sh which finds all broken links in .md files. 
+    had to fix 150 or so links in *.md files after reorg
+    overview intros for parity.md geth.md quorum.md etc.
+    virtualenv now simply in env/
+
+v42 30/11/2018 - 4/12/2018  
+    testRPC and unittesting with pytest - non-trivial, because
+     Web3.TestRPCProvider() can be started but not ended again, raised an issue;
+    Something (can be testrpc-py) has to be manually started before "py.test -v"
+     --> new compound testing script 'pytest.sh', which keeps logs & shows color.
+    Altogether 64 tests for 
+     clienttools, clienttype, tps, deploy, send, blocksDB_create, blocksDB_diagramming
+    All 64 PASSED on testrpc-py, quorum IBFT, geth-dev, parity instantseal & aura!
+     incl tps.loopUntil_NewContract (because loop) needed clever 2 threads approach 
+    Selected coverage only using .coveragerc
+    Issue: parity aura has no balance, send 0
+    and much more ... 
+    Unittesting is ~ready, hooray.
+
+v41 29/11/2018  experiments with testrpc-py https://pypi.org/project/eth-testrpc/ 
+    = got it running, but odd timestamps, see https://github.com/pipermerriam/eth-testrpc/issues/117
+    would be nice to use for the unittesting
+
+v40 29/11/2018  initial cleaning while planning methodology chapter; 
+    make more readable, remove obsolete code, add some TODOs
+
+  

@@ -1,0 +1,7 @@
+.git
+**/*.zip
+**/__pycache__/
+**/*.pyc
+chainhammer/docs/
+chainhammer/reader/img/
+chainhammer/results/
