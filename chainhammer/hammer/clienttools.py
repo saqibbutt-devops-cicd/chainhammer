@@ -1,255 +1,183 @@
 #!/usr/bin/env python3
-# coding: utf-8
+"""
+@summary: Which client type do we have?
+          quorum-raft/ibft OR energyweb OR parity OR geth OR ...
 
-import os
-import sys
-import time
+@version: v43 (16/December/2018)
+@since:   29/May/2018
+@organization:
+@author:  https://github.com/drandreaskrueger
+@see:     https://github.com/drandreaskrueger/chainhammer for updates
+"""
 
-from hammer.clienttype import clientType
-from hammer.config import FILE_PASSPHRASE
+################
+## Dependencies:
 
-# globals for node/client info
-NODENAME = "???"
-NODETYPE = "???"
-NODEVERSION = "???"
-CONSENSUS = "???"
-NETWORKID = -1
-CHAINNAME = "???"
-CHAINID = -1
+import json
+from pprint import pprint
+import requests  # pip3 install requests
+
+try:
+    from web3 import Web3, HTTPProvider  # pip3 install web3
+except Exception:
+    print("Dependencies unavailable. Start virtualenv first!")
+    exit()
+
+# extend path for imports:
+if __name__ == '__main__' and __package__ is None:
+    from os import sys, path
+    sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
+
+from hammer.config import RPCaddress
 
 
-################################################################################
-# printing dependency versions (must never crash chainhammer)
+############################################################
+## the main function:
 
-def printVersions():
-    """Print dependency versions without crashing (informational only)."""
-    import subprocess
+def clientType(w3, ifPrint=True):
+    """
+    @summary:
+      Determine what sort of node/client we talk to:
+      quorum-raft / quorum-istanbul / parity / geth / etc.
+    @return:
+      nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
+    """
 
-    # web3
+    consensus = "???"
+    chainName = "???"
+    chainId = -1
+
+    # ----------------------------------------------------------------------
+    # consensus detection (best-effort)
+    # ----------------------------------------------------------------------
+
+    # Quorum raft / istanbul (older heuristics)
     try:
-        from web3 import __version__ as web3version
+        answer = w3.manager.request_blocking("admin_nodeInfo", [])
+        # quorum returns protocols / raft / istanbul sometimes
+        try:
+            if 'raft' in answer.get('protocols', {}).keys():
+                consensus = "raft"
+            if 'istanbul' in answer.get('protocols', {}).keys():
+                consensus = "istanbul"
+        except Exception:
+            pass
     except Exception:
-        web3version = "not-installed"
+        pass
 
-    # py-solc (pip name: py-solc; import name: solc)
-    pysolcversion = "not-installed"
+    # ----------------------------------------------------------------------
+    # client identification
+    # ----------------------------------------------------------------------
+
+    # Geth / Parity / Energy Web (and custom nodes):
     try:
-        import pkg_resources  # comes with setuptools
-        try:
-            pysolcversion = pkg_resources.get_distribution("py-solc").version
-        except Exception:
-            pysolcversion = "not-installed"
+        nodeString = w3.version.node
     except Exception:
-        pysolcversion = "unknown"
+        nodeString = "unknown"
 
-    # eth-testrpc (pip name: eth-testrpc; import name: testrpc)
-    try:
-        from testrpc import __version__ as ethtestrpcversion
-    except Exception:
-        ethtestrpcversion = "not-installed"
+    # Some clients return a geth-style string like:
+    #   Geth/v1.10.26-stable-.../linux-amd64/go1.20.5
+    # but some custom nodes return multi-line strings without slashes, e.g.:
+    #   Version dev ()
+    #   Compiled at  using Go go1.23.8 (amd64)
+    nodeString = (nodeString or "").strip()
 
-    # solc binary version (tolerate solc printing to stderr)
-    def _solc_version():
-        try:
-            p = subprocess.run(
-                ["solc", "--version"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            combined = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
-            if not combined:
-                return "unknown"
-            for line in combined.splitlines():
-                line = line.strip()
-                if line:
-                    return line
-            return "unknown"
-        except FileNotFoundError:
-            return "not-found"
-        except Exception:
-            return "unknown"
+    # default values
+    nodeName = "Unknown"
+    nodeVersion = "unknown"
 
-    solcver = _solc_version()
+    if "/" in nodeString:
+        parts = nodeString.split("/")
+        nodeName = parts[0].strip() if len(parts) > 0 else "Unknown"
 
-    print(
-        "versions: web3 %s, py-solc: %s, solc %s, testrpc %s, python %s"
-        % (web3version, pysolcversion, solcver, ethtestrpcversion, sys.version.replace("\n", ""))
-    )
+        # geth: name/version/...
+        if len(parts) > 1:
+            nodeVersion = parts[1].strip()
 
+        # Parity: sometimes version is at index 2 (see upstream issue)
+        if nodeName in ("Parity", "Parity-Ethereum") and len(parts) > 2:
+            nodeVersion = parts[2].strip()
 
-################################################################################
-# web3 connection + node metadata
+        if nodeName == "Parity-Ethereum":
+            nodeName = "Parity"
+    else:
+        # Fallback for non-standard / multi-line version strings
+        first_line = nodeString.splitlines()[0].strip() if nodeString else "Unknown"
+        nodeName = first_line or "Unknown"
 
-def start_web3connection(RPCaddress, account=None):
-    from web3 import Web3, HTTPProvider
-
-    w3 = Web3(HTTPProvider(RPCaddress))
-
-    if not w3.isConnected():
-        raise RuntimeError("Cannot connect to RPC at %s" % RPCaddress)
-
-    # web3 v4 compatible node version string:
-    node_ver = getattr(getattr(w3, "version", None), "node", None) or "unknown"
-
-    print(
-        "web3 connection established, blockNumber = %s, node version string = %s"
-        % (w3.eth.blockNumber, node_ver)
-    )
-
-    accountname = "chosen"
-
-    if not account:
-        # Many remote RPC nodes return eth_accounts=[]
-        try:
-            accounts = w3.eth.accounts
-        except Exception:
-            accounts = []
-
-        if accounts and len(accounts) > 0:
-            w3.eth.defaultAccount = accounts[0]
-            accountname = "first"
+        # try to extract a go toolchain version like "go1.23.8" if present
+        import re as _re
+        m_go = _re.search(r"(go\d+\.\d+(?:\.\d+)?)", nodeString)
+        if m_go:
+            nodeVersion = m_go.group(1)
         else:
-            ch_from = os.getenv("CH_FROM")
-            if ch_from:
-                w3.eth.defaultAccount = ch_from
-                accountname = "CH_FROM"
-                print("No RPC accounts; using CH_FROM =", ch_from)
-            else:
-                raise RuntimeError(
-                    "RPC returned no accounts (eth_accounts=[]). "
-                    "Set CH_FROM (and usually CH_PRIVKEY for signing) or use a node that exposes/unlocks accounts."
-                )
+            nodeVersion = first_line
 
+    known = ("Geth", "Parity", "Energy Web", "TestRPC")
+    if nodeName not in known:
+        print("Interesting, '%s', a new node type? '%s'" % (nodeName, nodeString))
+
+    # Quorum pretends to be Geth - so how to distinguish vanillaGeth from QuorumGeth?
+    #  - see https://github.com/jpmorganchase/quorum/issues/507
+    nodeType = nodeName
+
+    if consensus in ('raft', 'istanbul'):
+        nodeName = "Quorum"
+
+    if nodeName == "Energy Web":
+        nodeType = "Parity"
+        consensus = "PoA"  # assumption
+
+    # ----------------------------------------------------------------------
+    # network + chain id
+    # ----------------------------------------------------------------------
+
+    # network id
+    try:
+        networkId = w3.net.version
+        try:
+            networkId = int(networkId)
+        except Exception:
+            pass
+    except Exception:
+        networkId = -1
+
+    # chain id (may not exist on old clients)
+    try:
+        chainId = int(w3.eth.chainId)
+    except Exception:
+        chainId = -1
+
+    if ifPrint:
+        print("nodeName:", nodeName, "nodeType:", nodeType, "nodeVersion:", nodeVersion,
+              "consensus:", consensus, "network:", networkId,
+              "chainName:", chainName, "chainId:", chainId)
+
+    return nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
+
+
+############################################################
+## little test runner below (unchanged behaviour)
+
+def simple_web3connection(RPCaddress):
+    w3 = Web3(HTTPProvider(RPCaddress))
+    print("connected:", w3.isConnected(), "blockNumber =", w3.eth.blockNumber, end=", ")
+    print("node version string = ", w3.version.node)
     return w3
 
 
-def setGlobalVariables_clientType(w3):
-    global NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
-
-    NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID = clientType(w3)
-
-    formatter = (
-        "nodeName: %s, nodeType: %s, nodeVersion: %s, consensus: %s, network: %s, chainName: %s, chainId: %s"
-    )
-    print(formatter % (NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID))
-
-    return NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
+def run_clientType(w3):
+    nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId = clientType(w3)
+    return nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
 
 
-def if_poa_then_bugfix(w3, CONSENSUS):
-    """POA middleware for geth/parity POA chains."""
-    if CONSENSUS != "poa":
-        return
-    try:
-        from web3.middleware import geth_poa_middleware
-        w3.middleware_stack.inject(geth_poa_middleware, layer=0)
-    except Exception:
-        pass
+def justTryingOutDifferentThings(ifPrint=True):
+    # placeholder / debug
+    pass
 
 
-def web3connection(RPCaddress, account=None):
-    """Create web3 connection and detect node type."""
-    printVersions()
-
-    w3 = start_web3connection(RPCaddress=RPCaddress, account=account)
-    chainInfos = setGlobalVariables_clientType(w3)
-    if_poa_then_bugfix(w3, chainInfos[3])  # CONSENSUS
-
-    return w3, chainInfos
-
-
-################################################################################
-# block helpers (needed by tps.py)
-
-def getBlockTransactionCount(w3, block_identifier):
-    """Return number of tx in a block (compatible across nodes/web3 versions)."""
-    try:
-        # web3 v4 has eth.getBlockTransactionCount
-        return int(w3.eth.getBlockTransactionCount(block_identifier))
-    except Exception:
-        try:
-            blk = w3.eth.getBlock(block_identifier)
-            return len(blk["transactions"]) if isinstance(blk, dict) else len(blk.transactions)
-        except Exception:
-            return 0
-
-
-################################################################################
-# account tools (deploy.py expects unlockAccount() to be callable easily)
-
-def _read_passphrase():
-    """Try env CH_PASSWORD then FILE_PASSPHRASE (if exists)."""
-    pw = os.getenv("CH_PASSWORD")
-    if pw:
-        return pw
-    try:
-        if os.path.exists(FILE_PASSPHRASE):
-            return open(FILE_PASSPHRASE, "r").read().strip()
-    except Exception:
-        pass
-    return None
-
-
-def unlockAccount(w3=None, accountAddress=None, password=None):
-    """
-    Best-effort unlock. Must never crash chainhammer.
-
-    - If node doesn't support personal API: returns False.
-    - If CH_PRIVKEY signing is used: unlocking may not be required (returns False/True depending).
-    """
-    try:
-        if w3 is None:
-            # deploy.py previously called unlockAccount() with no args.
-            # We keep it safe: do nothing, don't crash.
-            return False
-
-        if not accountAddress:
-            try:
-                accountAddress = w3.eth.defaultAccount
-            except Exception:
-                accountAddress = None
-
-        if not accountAddress:
-            return False
-
-        if password is None:
-            password = _read_passphrase()
-
-        if password is None:
-            # no password available -> can't unlock via personal API
-            return False
-
-        # Try geth namespace first
-        try:
-            w3.geth.personal.unlock_account(accountAddress, password)
-            return True
-        except Exception:
-            pass
-
-        # Try parity/openethereum style (some nodes expose w3.personal)
-        try:
-            w3.personal.unlockAccount(accountAddress, password)
-            return True
-        except Exception:
-            pass
-
-        return False
-    except Exception:
-        return False
-
-
-################################################################################
-# simple helpers
-
-def waitForTransactionReceipt(w3, tx_hash, timeout=120):
-    """Wait for tx receipt, return it when mined."""
-    start = time.time()
-    while True:
-        receipt = w3.eth.getTransactionReceipt(tx_hash)
-        if receipt:
-            return receipt
-        if time.time() - start > timeout:
-            raise TimeoutError("Timed out waiting for receipt: %s" % str(tx_hash))
-        time.sleep(1)
+if __name__ == '__main__':
+    w3 = simple_web3connection(RPCaddress=RPCaddress)
+    run_clientType(w3)
+    print()
+    justTryingOutDifferentThings()
