@@ -24,6 +24,6 @@ RUN chmod +x /opt/chainhammer/run.sh /opt/chainhammer/entry.sh
 # Python deps (runtime only)
 RUN pip install --upgrade "pip<24" "setuptools<69" wheel \
  && pip install --retries 5 -r /opt/chainhammer/requirements.min.txt \
- && pip install --retries 5 py-solc-x==1.1.1 eth-testrpc==1.3.5
+ && pip install --retries 5 py-solc==3.2.0 eth-testrpc==1.3.5
 
 ENTRYPOINT ["/opt/chainhammer/entry.sh"]
