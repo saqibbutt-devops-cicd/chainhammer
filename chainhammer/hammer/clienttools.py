@@ -98,47 +98,42 @@ def printVersions():
 # get a connection, and find out as much as possible
 
 
-def start_web3connection(RPCaddress=None, account=None):
-    """
-    get a web3 object, and make it global 
-    """
-    global w3
-    if RPCaddress:
-        # HTTP provider 
-        # (TODO: also try whether IPC provider is faster, when quorum-outside-vagrant starts working)
-        w3 = Web3(HTTPProvider(RPCaddress, request_kwargs={'timeout': 120}))
-    else:
-        # w3 = Web3(Web3.EthereumTesterProvider()) # does NOT work!
-        w3 = Web3(Web3.TestRPCProvider())
+def start_web3connection(RPCaddress, account=None):
+    from web3 import Web3, HTTPProvider
 
-    print ("web3 connection established, blockNumber =", w3.eth.blockNumber, end=", ")
-    print ("node version string = ", w3.version.node)
-accountname="chosen"
-if not account:
-    # Prefer an account returned by the node, but some RPC nodes return no accounts (eth_accounts=[]).
-    # In that case, allow the caller to specify a funded sender address via CH_FROM.
-    try:
-        accounts = w3.eth.accounts
-    except Exception:
-        accounts = []
+    w3 = Web3(HTTPProvider(RPCaddress))
 
-    if accounts and len(accounts) > 0:
-        w3.eth.defaultAccount = accounts[0]  # set first account as sender
-        accountname = "first"
-    else:
-        import os
-        ch_from = os.getenv("CH_FROM")
-        if ch_from:
-            w3.eth.defaultAccount = ch_from
-            accountname = "CH_FROM"
-            print("No accounts returned by RPC; using CH_FROM =", ch_from)
+    if not w3.isConnected():
+        raise RuntimeError("Cannot connect to RPC at %s" % RPCaddress)
+
+    node_ver = getattr(getattr(w3, "version", None), "node", None) or "unknown"
+    print("web3 connection established, blockNumber = %s, node version string = %s"
+      % (w3.eth.blockNumber, node_ver))
+
+    accountname = "chosen"
+
+    if not account:
+        try:
+            accounts = w3.eth.accounts
+        except Exception:
+            accounts = []
+
+        if accounts and len(accounts) > 0:
+            w3.eth.defaultAccount = accounts[0]
+            accountname = "first"
         else:
-            raise RuntimeError(
-                "RPC returned no accounts (eth_accounts=[]). "
-                "Set CH_FROM (and usually CH_PRIVKEY for signing) or configure the node to expose/unlock accounts."
-            )
-    print (accountname + " account of node is", w3.eth.defaultAccount, end=", ")
-    print ("balance is %s Ether" % w3.fromWei(w3.eth.getBalance(w3.eth.defaultAccount), "ether"))
+            import os
+            ch_from = os.getenv("CH_FROM")
+            if ch_from:
+                w3.eth.defaultAccount = ch_from
+                accountname = "CH_FROM"
+                print("No RPC accounts; using CH_FROM =", ch_from)
+            else:
+                raise RuntimeError(
+                    "RPC returned no accounts (eth_accounts=[]). "
+                    "Set CH_FROM (and CH_PRIVKEY if needed) "
+                    "or use a node that exposes/unlocks accounts."
+                )
 
     return w3
 
