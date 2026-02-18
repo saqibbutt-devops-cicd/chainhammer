@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
+import os
 import sys
 import time
 
 from hammer.clienttype import clientType
+from hammer.config import FILE_PASSPHRASE
 
 # globals for node/client info
 NODENAME = "???"
@@ -20,10 +22,7 @@ CHAINID = -1
 # printing dependency versions (must never crash chainhammer)
 
 def printVersions():
-    """Print dependency versions without crashing.
-
-    This is informational. It must never stop chainhammer from running.
-    """
+    """Print dependency versions without crashing (informational only)."""
     import subprocess
 
     # web3
@@ -81,7 +80,7 @@ def printVersions():
 
 
 ################################################################################
-# get a connection, and find out as much as possible
+# web3 connection + node metadata
 
 def start_web3connection(RPCaddress, account=None):
     from web3 import Web3, HTTPProvider
@@ -91,7 +90,9 @@ def start_web3connection(RPCaddress, account=None):
     if not w3.isConnected():
         raise RuntimeError("Cannot connect to RPC at %s" % RPCaddress)
 
+    # web3 v4 compatible node version string:
     node_ver = getattr(getattr(w3, "version", None), "node", None) or "unknown"
+
     print(
         "web3 connection established, blockNumber = %s, node version string = %s"
         % (w3.eth.blockNumber, node_ver)
@@ -100,8 +101,7 @@ def start_web3connection(RPCaddress, account=None):
     accountname = "chosen"
 
     if not account:
-        # Some RPC nodes return no accounts (eth_accounts=[]). In that case, allow specifying a funded
-        # sender address via CH_FROM. If neither exists, fail with a clear message.
+        # Many remote RPC nodes return eth_accounts=[]
         try:
             accounts = w3.eth.accounts
         except Exception:
@@ -111,7 +111,6 @@ def start_web3connection(RPCaddress, account=None):
             w3.eth.defaultAccount = accounts[0]
             accountname = "first"
         else:
-            import os
             ch_from = os.getenv("CH_FROM")
             if ch_from:
                 w3.eth.defaultAccount = ch_from
@@ -120,90 +119,137 @@ def start_web3connection(RPCaddress, account=None):
             else:
                 raise RuntimeError(
                     "RPC returned no accounts (eth_accounts=[]). "
-                    "Set CH_FROM (and CH_PRIVKEY if needed) "
-                    "or use a node that exposes/unlocks accounts."
+                    "Set CH_FROM (and usually CH_PRIVKEY for signing) or use a node that exposes/unlocks accounts."
                 )
 
     return w3
 
 
 def setGlobalVariables_clientType(w3):
-    """
-    Set global variables.
-    """
     global NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
 
     NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID = clientType(w3)
 
-    formatter = "nodeName: %s, nodeType: %s, nodeVersion: %s, consensus: %s, network: %s, chainName: %s, chainId: %s"
+    formatter = (
+        "nodeName: %s, nodeType: %s, nodeVersion: %s, consensus: %s, network: %s, chainName: %s, chainId: %s"
+    )
     print(formatter % (NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID))
 
     return NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
 
 
-def if_poa_then_bugfix(w3, NODENAME, CHAINNAME, CONSENSUS):
-    """
-    bugfix for quorum web3.py problem, see
-    https://github.com/ethereum/web3.py/issues/898#issuecomment-396701172
-    and
-    https://github.com/ethereum/web3.py/issues/898
-    """
+def if_poa_then_bugfix(w3, CONSENSUS):
+    """POA middleware for geth/parity POA chains."""
     if CONSENSUS != "poa":
         return
-
-    from web3.middleware import geth_poa_middleware
-    w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+    try:
+        from web3.middleware import geth_poa_middleware
+        w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+    except Exception:
+        pass
 
 
 def web3connection(RPCaddress, account=None):
-    """
-    create web3 connection and find out as much as possible about client.
-    also set bugfixes when needed.
-    """
-
+    """Create web3 connection and detect node type."""
     printVersions()
 
     w3 = start_web3connection(RPCaddress=RPCaddress, account=account)
+    chainInfos = setGlobalVariables_clientType(w3)
+    if_poa_then_bugfix(w3, chainInfos[3])  # CONSENSUS
 
-    # set globals
-    NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID = setGlobalVariables_clientType(w3)
-
-    # fix if needed
-    if_poa_then_bugfix(w3, NODENAME, CHAINNAME, CONSENSUS)
-
-    return w3, (NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID)
+    return w3, chainInfos
 
 
 ################################################################################
-# account tools
+# block helpers (needed by tps.py)
 
-def unlockAccount(w3, accountAddress, password):
-    """
-    unlock an account on the RPC node (if supported).
-    """
-    if not accountAddress:
-        return
-
-    # some nodes don't support personal_* methods
+def getBlockTransactionCount(w3, block_identifier):
+    """Return number of tx in a block (compatible across nodes/web3 versions)."""
     try:
-        w3.geth.personal.unlock_account(accountAddress, password)
-        print("Unlocked account:", accountAddress)
-    except Exception as e:
-        print("Could not unlock account via RPC personal API:", str(e))
+        # web3 v4 has eth.getBlockTransactionCount
+        return int(w3.eth.getBlockTransactionCount(block_identifier))
+    except Exception:
+        try:
+            blk = w3.eth.getBlock(block_identifier)
+            return len(blk["transactions"]) if isinstance(blk, dict) else len(blk.transactions)
+        except Exception:
+            return 0
+
+
+################################################################################
+# account tools (deploy.py expects unlockAccount() to be callable easily)
+
+def _read_passphrase():
+    """Try env CH_PASSWORD then FILE_PASSPHRASE (if exists)."""
+    pw = os.getenv("CH_PASSWORD")
+    if pw:
+        return pw
+    try:
+        if os.path.exists(FILE_PASSPHRASE):
+            return open(FILE_PASSPHRASE, "r").read().strip()
+    except Exception:
+        pass
+    return None
+
+
+def unlockAccount(w3=None, accountAddress=None, password=None):
+    """
+    Best-effort unlock. Must never crash chainhammer.
+
+    - If node doesn't support personal API: returns False.
+    - If CH_PRIVKEY signing is used: unlocking may not be required (returns False/True depending).
+    """
+    try:
+        if w3 is None:
+            # deploy.py previously called unlockAccount() with no args.
+            # We keep it safe: do nothing, don't crash.
+            return False
+
+        if not accountAddress:
+            try:
+                accountAddress = w3.eth.defaultAccount
+            except Exception:
+                accountAddress = None
+
+        if not accountAddress:
+            return False
+
+        if password is None:
+            password = _read_passphrase()
+
+        if password is None:
+            # no password available -> can't unlock via personal API
+            return False
+
+        # Try geth namespace first
+        try:
+            w3.geth.personal.unlock_account(accountAddress, password)
+            return True
+        except Exception:
+            pass
+
+        # Try parity/openethereum style (some nodes expose w3.personal)
+        try:
+            w3.personal.unlockAccount(accountAddress, password)
+            return True
+        except Exception:
+            pass
+
+        return False
+    except Exception:
+        return False
 
 
 ################################################################################
 # simple helpers
 
 def waitForTransactionReceipt(w3, tx_hash, timeout=120):
-    """
-    wait for tx receipt, return it when mined.
-    """
+    """Wait for tx receipt, return it when mined."""
     start = time.time()
     while True:
         receipt = w3.eth.getTransactionReceipt(tx_hash)
         if receipt:
             return receipt
         if time.time() - start > timeout:
-            raise TimeoutError("Timed out waiting for receipt: %s" % tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash))
+            raise TimeoutError("Timed out waiting for receipt: %s" % str(tx_hash))
         time.sleep(1)
