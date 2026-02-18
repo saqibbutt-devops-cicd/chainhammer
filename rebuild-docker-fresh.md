@@ -1,9 +1,3 @@
-Alright 😄 you want the **“wipe it from orbit” Docker commands** — the nuclear option.
-
-Here are **safe → aggressive → full apocalypse** levels.
-
----
-
 # 🟢 Level 1 — Clean This Project Only (Safe)
 
 If you only want to reset **chainhammer** or your EVM lab:

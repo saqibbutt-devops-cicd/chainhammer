@@ -37,14 +37,29 @@ from hammer.clienttype import clientType
 
 def printVersions():
     import sys
+    import subprocess
     from web3 import __version__ as web3version 
     from solc import get_solc_version
     from testrpc import __version__ as ethtestrpcversion
     
     import pkg_resources
+
+    def safe_solc_version():
+        try:
+            p = subprocess.run(["solc", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out = (p.stdout or "") + "\n" + (p.stderr or "")
+            out = out.strip()
+            # return first non-empty line
+            for line in out.splitlines():
+                line = line.strip()
+                if line:
+                    return line
+            return "unknown"
+        except Exception:
+            return "not-installed"
     pysolcversion = pkg_resources.get_distribution("py-solc").version
     
-    print ("versions: web3 %s, py-solc: %s, solc %s, testrpc %s, python %s" % (web3version, pysolcversion, get_solc_version(), ethtestrpcversion, sys.version.replace("\n", "")))
+    print ("versions: web3 %s, py-solc: %s, solc %s, testrpc %s, python %s" % (web3version, pysolcversion, safe_solc_version(), ethtestrpcversion, sys.version.replace("\n", "")))
 
 
 ################################################################################
