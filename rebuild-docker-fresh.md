@@ -15,7 +15,7 @@ docker rmi -f chainhammer:local 2>/dev/null || true
 
 ### Rebuild fresh
 ```bash
-docker build --no-cache -t chainhammer:local .
+docker build --platform linux/amd64 --no-cache -t chainhammer:local .
 ```
 
 ---

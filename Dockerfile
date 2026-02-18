@@ -3,15 +3,16 @@ FROM python:3.7-bullseye
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /opt/chainhammer
 
-# System deps + solc
+# System deps + REAL solc (NOT solcjs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash ca-certificates curl git jq \
       build-essential gcc \
       libffi-dev libssl-dev \
       expect \
-      nodejs npm \
-    && npm i -g solc@0.4.21 \
-    && ln -sf /usr/local/bin/solcjs /usr/local/bin/solc \
+    && curl -fL -o /usr/local/bin/solc \
+      https://github.com/ethereum/solidity/releases/download/v0.4.21/solc-static-linux \
+    && chmod +x /usr/local/bin/solc \
+    && solc --version \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy app
