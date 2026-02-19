@@ -1,247 +1,186 @@
 #!/usr/bin/env python3
 """
-@summary: Which client type do we have? 
+@summary: Which client type do we have?
           quorum-raft/ibft OR energyweb OR parity OR geth OR ...
 
 @version: v43 (16/December/2018)
 @since:   29/May/2018
-@organization: 
 @author:  https://github.com/drandreaskrueger
-@see:     https://github.com/drandreaskrueger/chainhammer for updates
 """
-
 
 ################
 ## Dependencies:
 
 import json
 from pprint import pprint
-import requests # pip3 install requests
+import requests
 
 try:
-    from web3 import Web3, HTTPProvider # pip3 install web3
+    from web3 import Web3, HTTPProvider
 except:
-    print ("Dependencies unavailable. Start virtualenv first!")
+    print("Dependencies unavailable. Start virtualenv first!")
     exit()
 
-
 # extend sys.path for imports:
-if __name__ == '__main__' and __package__ is None:
+if __name__ == "__main__" and __package__ is None:
     from os import sys, path
     sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
-    
-from hammer.config import RPCaddress
 
+from hammer.config import RPCaddress
 
 
 class Error(Exception):
     pass
 
+
 class MethodNotExistentError(Error):
     pass
 
 
-def curl_post(method, txParameters=None, RPCaddress=RPCaddress, ifPrint=False):
-    """
-    call Ethereum RPC functions that are still missing from web3.py 
-    see
-    https://github.com/jpmorganchase/quorum/issues/369#issuecomment-392240389
-    """
-    payload= {"jsonrpc" : "2.0",
-               "method" : method,
-               "id"     : 1}
-    if txParameters:
-        payload["params"] = [txParameters]
-    headers = {'Content-type' : 'application/json'}
-    response = requests.post(RPCaddress, json=payload, headers=headers)
-    response_json = response.json()
-    
-    if ifPrint: 
-        print('raw json response: {}'.format(response_json))
-    
-    if "error" in response_json:
-        raise MethodNotExistentError()
-    else:
-        return response_json['result']
-        
-        
+def curl_post(method, ifPrint=False, RPCaddress=RPCaddress, params=None):
+    if params is None:
+        params = []
+    payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": 1}
+    r = requests.post(RPCaddress, json=payload)
+    if r.status_code != 200:
+        raise RuntimeError("HTTP %s calling %s" % (r.status_code, method))
+    answer = r.json()
+    if "error" in answer:
+        msg = answer["error"].get("message", "")
+        if "The method" in msg and "does not exist" in msg:
+            raise MethodNotExistentError(msg)
+        if "Method not found" in msg:
+            raise MethodNotExistentError(msg)
+        # Unknown error
+        raise RuntimeError("RPC error calling %s: %s" % (method, answer["error"]))
+    result = answer.get("result", None)
+    if ifPrint:
+        print(method, "->")
+        pprint(result)
+    return result
+
+
 def clientTypeWarnings(nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId):
-    if nodeName=="TestRPC":
-        print ("WARN: TestRPC has odd timestamp units, check 'tps.timestampToSeconds()' for updates")
-    if consensus=="raft":
-        print ("WARN: raft consensus did report timestamps in nanoseconds. Is that still the case?")
+    if nodeName == "Unknown":
+        print("WARN: could not detect nodeName from client string.")
+    if consensus == "???":
+        print("WARN: consensus could not be detected.")
+    if nodeName == "TestRPC":
+        print("WARN: TestRPC has odd timestamp units")
+    if consensus == "raft":
+        print("WARN: raft consensus did not work in all cases")
 
 
 def clientType(w3):
     """
-    figure out which client (quorum, parity, geth, energyweb, etc.),
-    which client type (fork of geth, or fork of parity),
-    which consensus algorithm (e.g. RAFT, IBFT, aura, clique),
-    and networkId, and chainId, and chainName.
-    
-    Sorry, very ugly, and probably faulty too, and for sure will break some day. 
-    The fractions of the Ethereum world seem to have unsolved standardisation issues.
-    
-    See github issues
-    * https://github.com/jpmorganchase/quorum/issues/505
-    * https://github.com/jpmorganchase/quorum/issues/507
-    * https://github.com/paritytech/parity-ethereum/issues/9432
+    figure out which client (quorum, parity, geth...)
+    which consensus algorithm (e.g. raft, istanbul, clique, ethash)
+    and networkId / chainId / chainName
     """
 
     consensus = "???"
     chainName = "???"
     networkId = -1
     chainId = -1
-    
+
+    # network id
     try:
         answer = curl_post(method="net_version")
-        networkId = int(answer) 
+        networkId = int(answer)
     except MethodNotExistentError:
         pass
 
-    
-    # How to detect raft consensus? 
-    #        Unfortunately this fails with /quorum-example/7nodes 
-    #        because they forgot to open the RPC api "raft"
-    #        see issues 
-    #
-    #
+    # raft consensus?
     try:
-        answer = curl_post(method="raft_role") # , ifPrint=True)
+        answer = curl_post(method="raft_role")
         if answer:
             consensus = "raft"
     except MethodNotExistentError:
         pass
-    
-        # IBFT consensus?
-        # There is a specific answer, just in an unusual place; see issue
-        #     https://github.com/jpmorganchase/quorum/issues/505
-        try: 
-            answer = curl_post(method="admin_nodeInfo")
-            if 'istanbul' in answer.get('protocols', {}).keys():
-                consensus = "istanbul"
-        except:
-            pass
 
+    # IBFT/istanbul?
+    try:
+        answer = curl_post(method="admin_nodeInfo")
+        if "istanbul" in answer.get("protocols", {}).keys():
+            consensus = "istanbul"
+    except:
+        pass
 
-    # Geth / Parity / Energy Web:
-    nodeString = w3.version.node
-    
-    nodeName = nodeString.split("/")[0] 
-    known = ("Geth", "Parity", "Parity-Ethereum", "Energy Web", "TestRPC")
-    if nodeName not in known:
-        print ("Interesting, '%s', a new node type? '%s'" % (nodeName, nodeString))
-    
-    if nodeName == "Parity-Ethereum":
-        nodeName = "Parity"
+    nodeString = (w3.version.node or "").strip()
 
-    nodeVersion = nodeString.split("/")[1]
-    if nodeName == "Parity":
-        # see issue https://github.com/paritytech/parity-ethereum/issues/10215
-        nodeVersion = nodeString.split("/")[2]
+    # Safe defaults
+    nodeName = "Unknown"
+    nodeVersion = "unknown"
+    nodeType = "Unknown"
 
-    # Quorum pretends to be Geth - so how to distinguish vanillaGeth from QuorumGeth?
-    #  - see https://github.com/jpmorganchase            /quorum/issues/507
-    nodeType = nodeName    
+    if "/" in nodeString:
+        parts = nodeString.split("/")
+        nodeName = parts[0].strip() if len(parts) > 0 else "Unknown"
+        known = ("Geth", "Parity", "Parity-Ethereum", "Energy Web", "TestRPC")
+        if nodeName not in known:
+            print("Interesting, '%s', a new node type? '%s'" % (nodeName, nodeString))
 
-    
-    if consensus in ('raft', 'istanbul'):
-        # TODO: Because raft RPC is not open in example (see above), this can 
-        #       still not distinguish between vanilla geth, and quorum RAFT. 
-        nodeName = "Quorum"
-        
-    if nodeName == "Energy Web":
-        nodeType = "Parity"
-        consensus = "PoA"  # Dangerous assumption. TODO: ... after they took care of the open issues, this gets easier. 
+        if nodeName == "Parity-Ethereum":
+            nodeName = "Parity"
 
+        nodeVersion = parts[1].strip() if len(parts) > 1 else "unknown"
+        nodeType = nodeName  # ✅ IMPORTANT: always set nodeType for '/' case
 
-    if nodeType=="Parity":
+        if nodeName == "Parity" and len(parts) > 2:
+            # see issue https://github.com/paritytech/parity-ethereum/issues/10215
+            nodeVersion = parts[2].strip()
+
+    else:
+        # Non-standard / multi-line client strings (common in custom nodes)
+        first_line = nodeString.splitlines()[0].strip() if nodeString else "Unknown"
+        nodeName = first_line or "Unknown"
+        nodeType = nodeName
+
+        import re
+        m = re.search(r"(go\d+\.\d+(?:\.\d+)?)", nodeString)
+        nodeVersion = m.group(1) if m else first_line
+
+        if consensus in ("raft", "istanbul"):
+            nodeName = "Quorum"
+
+        if nodeName == "Energy Web":
+            nodeType = "Parity"
+            consensus = "PoA"
+
+    # Parity-specific info
+    if nodeType == "Parity":
         try:
-            chainName = curl_post(method="parity_chain") #  foundation, tobalaba
-            if chainName=="foundation":
-                consensus = "PoW"  # dangerous assumption, because some day that might actually change. For now fine. 
+            chainName = curl_post(method="parity_chain")
+            if chainName == "foundation":
+                consensus = "PoW"
         except MethodNotExistentError:
             pass
         try:
             answer = curl_post(method="parity_chainId")
-            try:
-                chainId = int(answer, 16)
-            except TypeError:
-                chainId = -1
+            if answer is not None:
+                chainId = int(answer, 16) if isinstance(answer, str) else int(answer)
         except MethodNotExistentError:
             pass
 
-    
-    if nodeName=="Geth":
-        # TODO: This can still not distinguish between vanilla geth, and quorum RAFT. 
+    # Geth-style chainId / consensus info
+    if nodeType == "Geth":
         try:
             answer = curl_post(method="admin_nodeInfo")
-            
-            answer_config = answer['protocols']['eth'].get('config', None)
+            answer_config = answer.get("protocols", {}).get("eth", {}).get("config", None)
             if answer_config:
                 if "clique" in answer_config:
-                    consensus="clique"
+                    consensus = "clique"
                 if "ethash" in answer_config:
-                    consensus="ethash"
-                chainId = answer_config.get('chainId', None)
-                
-            # TODO: 
-            # Does geth also have a concept of chainName (e.g. for Morden/Ropsten/...)? How to query?    
-            # chainName = curl_post(method="net_version") #
-            
+                    consensus = "ethash"
+                chainId = answer_config.get("chainId", chainId)
         except MethodNotExistentError:
             pass
-    
+        except Exception:
+            pass
+
     clientTypeWarnings(nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId)
-    
     return nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
-    
+
 
 def run_clientType(w3):
-    """
-    test the above
-    """
-    nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId = clientType(w3)
-    txt = "nodeName: %s, nodeType: %s, nodeVersion: %s, consensus: %s, network: %s, chainName: %s, chainId: %s"
-    print ( txt % (nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId))
-
-
-def justTryingOutDifferentThings(ifPrint=False):
-    """
-    perhaps these calls can help, or a combination thereof?
-    also see 
-    https://github.com/jpmorganchase/quorum/blob/3d91976f08074c1f7f605beaadf4b37783026d85/internal/web3ext/web3ext.go#L600-L671
-
-    """
-    for method in ("web3_clientVersion", "admin_nodeInfo", "net_version", "rpc_modules", 
-                   "parity_chainId", "parity_chain", "parity_consensusCapability", 
-                   "parity_nodeKind", "parity_versionInfo", "eth_chainId"):
-        print ("\n%s:" % method)
-    
-        try:
-            pprint ( curl_post(method=method, ifPrint=ifPrint) )
-        except:
-            pass
-            
-
-def simple_web3connection(RPCaddress):
-    """
-    get a web3 object. 
-    simple, just for this demo here, 
-    do not use elsewhere, instead use clienttools.start_web3connection
-    """
-    w3 = Web3(HTTPProvider(RPCaddress, request_kwargs={'timeout': 120}))
-    print ("web3 connection established, blockNumber =", w3.eth.blockNumber, end=", ")
-    print ("node version string = ", w3.version.node)
-    return w3
-
-
-if __name__ == '__main__':
-
-    w3 = simple_web3connection(RPCaddress=RPCaddress) 
-
-    run_clientType(w3)
-    
-    print()
-    justTryingOutDifferentThings() # ifPrint=True)
-    
+    return clientType(w3)

@@ -1,183 +1,222 @@
 #!/usr/bin/env python3
-"""
-@summary: Which client type do we have?
-          quorum-raft/ibft OR energyweb OR parity OR geth OR ...
+# coding: utf-8
 
-@version: v43 (16/December/2018)
-@since:   29/May/2018
-@organization:
-@author:  https://github.com/drandreaskrueger
-@see:     https://github.com/drandreaskrueger/chainhammer for updates
-"""
+import os
+import sys
+import time
 
-################
-## Dependencies:
-
-import json
-from pprint import pprint
-import requests  # pip3 install requests
-
-try:
-    from web3 import Web3, HTTPProvider  # pip3 install web3
-except Exception:
-    print("Dependencies unavailable. Start virtualenv first!")
-    exit()
-
-# extend path for imports:
-if __name__ == '__main__' and __package__ is None:
-    from os import sys, path
-    sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
-
-from hammer.config import RPCaddress
+from hammer.clienttype import clientType
+from hammer.config import FILE_PASSPHRASE
 
 
-############################################################
-## the main function:
+# -------------------------------------------------------------------
+# Globals
+# -------------------------------------------------------------------
+NODENAME = "???"
+NODETYPE = "???"
+NODEVERSION = "???"
+CONSENSUS = "???"
+NETWORKID = -1
+CHAINNAME = "???"
+CHAINID = -1
 
-def clientType(w3, ifPrint=True):
-    """
-    @summary:
-      Determine what sort of node/client we talk to:
-      quorum-raft / quorum-istanbul / parity / geth / etc.
-    @return:
-      nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
-    """
 
-    consensus = "???"
-    chainName = "???"
-    chainId = -1
+# -------------------------------------------------------------------
+# Versions (must not crash)
+# -------------------------------------------------------------------
+def printVersions():
+    import subprocess
 
-    # ----------------------------------------------------------------------
-    # consensus detection (best-effort)
-    # ----------------------------------------------------------------------
-
-    # Quorum raft / istanbul (older heuristics)
     try:
-        answer = w3.manager.request_blocking("admin_nodeInfo", [])
-        # quorum returns protocols / raft / istanbul sometimes
+        from web3 import __version__ as web3version
+    except Exception:
+        web3version = "not-installed"
+
+    pysolcversion = "not-installed"
+    try:
+        import pkg_resources
         try:
-            if 'raft' in answer.get('protocols', {}).keys():
-                consensus = "raft"
-            if 'istanbul' in answer.get('protocols', {}).keys():
-                consensus = "istanbul"
+            pysolcversion = pkg_resources.get_distribution("py-solc").version
         except Exception:
-            pass
+            pysolcversion = "not-installed"
     except Exception:
-        pass
+        pysolcversion = "unknown"
 
-    # ----------------------------------------------------------------------
-    # client identification
-    # ----------------------------------------------------------------------
-
-    # Geth / Parity / Energy Web (and custom nodes):
     try:
-        nodeString = w3.version.node
+        from testrpc import __version__ as ethtestrpcversion
     except Exception:
-        nodeString = "unknown"
+        ethtestrpcversion = "not-installed"
 
-    # Some clients return a geth-style string like:
-    #   Geth/v1.10.26-stable-.../linux-amd64/go1.20.5
-    # but some custom nodes return multi-line strings without slashes, e.g.:
-    #   Version dev ()
-    #   Compiled at  using Go go1.23.8 (amd64)
-    nodeString = (nodeString or "").strip()
-
-    # default values
-    nodeName = "Unknown"
-    nodeVersion = "unknown"
-
-    if "/" in nodeString:
-        parts = nodeString.split("/")
-        nodeName = parts[0].strip() if len(parts) > 0 else "Unknown"
-
-        # geth: name/version/...
-        if len(parts) > 1:
-            nodeVersion = parts[1].strip()
-
-        # Parity: sometimes version is at index 2 (see upstream issue)
-        if nodeName in ("Parity", "Parity-Ethereum") and len(parts) > 2:
-            nodeVersion = parts[2].strip()
-
-        if nodeName == "Parity-Ethereum":
-            nodeName = "Parity"
-    else:
-        # Fallback for non-standard / multi-line version strings
-        first_line = nodeString.splitlines()[0].strip() if nodeString else "Unknown"
-        nodeName = first_line or "Unknown"
-
-        # try to extract a go toolchain version like "go1.23.8" if present
-        import re as _re
-        m_go = _re.search(r"(go\d+\.\d+(?:\.\d+)?)", nodeString)
-        if m_go:
-            nodeVersion = m_go.group(1)
-        else:
-            nodeVersion = first_line
-
-    known = ("Geth", "Parity", "Energy Web", "TestRPC")
-    if nodeName not in known:
-        print("Interesting, '%s', a new node type? '%s'" % (nodeName, nodeString))
-
-    # Quorum pretends to be Geth - so how to distinguish vanillaGeth from QuorumGeth?
-    #  - see https://github.com/jpmorganchase/quorum/issues/507
-    nodeType = nodeName
-
-    if consensus in ('raft', 'istanbul'):
-        nodeName = "Quorum"
-
-    if nodeName == "Energy Web":
-        nodeType = "Parity"
-        consensus = "PoA"  # assumption
-
-    # ----------------------------------------------------------------------
-    # network + chain id
-    # ----------------------------------------------------------------------
-
-    # network id
-    try:
-        networkId = w3.net.version
+    def _solc_version():
         try:
-            networkId = int(networkId)
+            p = subprocess.run(
+                ["solc", "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            combined = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
+            if not combined:
+                return "unknown"
+            for line in combined.splitlines():
+                line = line.strip()
+                if line:
+                    return line
+            return "unknown"
+        except FileNotFoundError:
+            return "not-found"
         except Exception:
-            pass
-    except Exception:
-        networkId = -1
+            return "unknown"
 
-    # chain id (may not exist on old clients)
-    try:
-        chainId = int(w3.eth.chainId)
-    except Exception:
-        chainId = -1
+    solcver = _solc_version()
 
-    if ifPrint:
-        print("nodeName:", nodeName, "nodeType:", nodeType, "nodeVersion:", nodeVersion,
-              "consensus:", consensus, "network:", networkId,
-              "chainName:", chainName, "chainId:", chainId)
-
-    return nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
+    print(
+        "versions: web3 %s, py-solc: %s, solc %s, testrpc %s, python %s"
+        % (web3version, pysolcversion, solcver, ethtestrpcversion, sys.version.replace("\n", ""))
+    )
 
 
-############################################################
-## little test runner below (unchanged behaviour)
+# -------------------------------------------------------------------
+# Web3 connect
+# -------------------------------------------------------------------
+def start_web3connection(RPCaddress, account=None):
+    from web3 import Web3, HTTPProvider
 
-def simple_web3connection(RPCaddress):
     w3 = Web3(HTTPProvider(RPCaddress))
-    print("connected:", w3.isConnected(), "blockNumber =", w3.eth.blockNumber, end=", ")
-    print("node version string = ", w3.version.node)
+    if not w3.isConnected():
+        raise RuntimeError("Cannot connect to RPC at %s" % RPCaddress)
+
+    node_ver = getattr(getattr(w3, "version", None), "node", None) or "unknown"
+
+    print(
+        "web3 connection established, blockNumber = %s, node version string = %s"
+        % (w3.eth.blockNumber, node_ver)
+    )
+
+    # Default account selection
+    if not account:
+        try:
+            accounts = w3.eth.accounts
+        except Exception:
+            accounts = []
+
+        if accounts and len(accounts) > 0:
+            w3.eth.defaultAccount = accounts[0]
+        else:
+            ch_from = os.getenv("CH_FROM")
+            if ch_from:
+                w3.eth.defaultAccount = ch_from
+                print("No RPC accounts; using CH_FROM =", ch_from)
+            else:
+                raise RuntimeError(
+                    "RPC returned no accounts (eth_accounts=[]). Set CH_FROM or use unlocked accounts."
+                )
+
     return w3
 
 
-def run_clientType(w3):
-    nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId = clientType(w3)
-    return nodeName, nodeType, nodeVersion, consensus, networkId, chainName, chainId
+def setGlobalVariables_clientType(w3):
+    global NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
+    NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID = clientType(w3)
+    return NODENAME, NODETYPE, NODEVERSION, CONSENSUS, NETWORKID, CHAINNAME, CHAINID
 
 
-def justTryingOutDifferentThings(ifPrint=True):
-    # placeholder / debug
-    pass
+def if_poa_then_bugfix(w3, consensus):
+    if consensus != "poa":
+        return
+    try:
+        from web3.middleware import geth_poa_middleware
+        w3.middleware_stack.inject(geth_poa_middleware, layer=0)
+    except Exception:
+        pass
 
 
-if __name__ == '__main__':
-    w3 = simple_web3connection(RPCaddress=RPCaddress)
-    run_clientType(w3)
-    print()
-    justTryingOutDifferentThings()
+# -------------------------------------------------------------------
+# ✅ REQUIRED by deploy.py + tps.py
+# -------------------------------------------------------------------
+def web3connection(RPCaddress, account=None):
+    printVersions()
+    w3 = start_web3connection(RPCaddress=RPCaddress, account=account)
+    chainInfos = setGlobalVariables_clientType(w3)
+    consensus = chainInfos[3]
+    if_poa_then_bugfix(w3, consensus)
+    return w3, chainInfos
+
+
+# -------------------------------------------------------------------
+# Used by tps.py
+# -------------------------------------------------------------------
+def getBlockTransactionCount(w3, block_identifier):
+    try:
+        return int(w3.eth.getBlockTransactionCount(block_identifier))
+    except Exception:
+        try:
+            blk = w3.eth.getBlock(block_identifier)
+            if isinstance(blk, dict):
+                return len(blk.get("transactions", []))
+            return len(blk.transactions)
+        except Exception:
+            return 0
+
+
+# -------------------------------------------------------------------
+# Unlock (safe)
+# -------------------------------------------------------------------
+def _read_passphrase():
+    pw = os.getenv("CH_PASSWORD")
+    if pw:
+        return pw
+    try:
+        if os.path.exists(FILE_PASSPHRASE):
+            return open(FILE_PASSPHRASE, "r").read().strip()
+    except Exception:
+        pass
+    return None
+
+
+def unlockAccount(w3=None, accountAddress=None, password=None):
+    # Do not crash if called wrongly
+    if w3 is None:
+        return False
+
+    if not accountAddress:
+        try:
+            accountAddress = w3.eth.defaultAccount
+        except Exception:
+            accountAddress = None
+
+    if not accountAddress:
+        return False
+
+    if password is None:
+        password = _read_passphrase()
+
+    if password is None:
+        return False
+
+    try:
+        w3.geth.personal.unlock_account(accountAddress, password)
+        return True
+    except Exception:
+        pass
+
+    try:
+        w3.personal.unlockAccount(accountAddress, password)
+        return True
+    except Exception:
+        return False
+
+
+# -------------------------------------------------------------------
+# Receipt wait helper
+# -------------------------------------------------------------------
+def waitForTransactionReceipt(w3, tx_hash, timeout=120):
+    start = time.time()
+    while True:
+        receipt = w3.eth.getTransactionReceipt(tx_hash)
+        if receipt:
+            return receipt
+        if time.time() - start > timeout:
+            raise TimeoutError("Timed out waiting for receipt: %s" % str(tx_hash))
+        time.sleep(1)
